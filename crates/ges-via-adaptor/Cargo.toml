@@ -1,0 +1,20 @@
+[package]
+name = "ges-via-adaptor"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+adaptor-sig = { version = "0.1.0", path = "../adaptor-sig" }
+ark-ec = "0.4"
+ark-ff = "0.4"
+ark-secp256k1 = "0.4"
+ark-std = "0.4"
+garble-yao = { version = "0.1.0", path = "../garble-yao" }
+rand.workspace = true
+schnorr = { version = "0.1.0", path = "../schnorr" }
+sha2.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true
+circuit = { path = "../circuit" }

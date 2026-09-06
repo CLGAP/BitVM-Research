@@ -1,0 +1,22 @@
+[package]
+name = "bitcoin-tx"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+bitcoin = "0.32"
+ges-via-adaptor = { path = "../ges-via-adaptor" }
+garble-yao = { path = "../garble-yao" }
+rand.workspace = true
+ark-secp256k1 = "0.4.0"
+ark-std = "0.4"
+
+[dev-dependencies]
+adaptor-sig = { path = "../adaptor-sig" }
+ark-ec = "0.4.0"
+ark-ff = "0.4.0"
+ark-std = "0.4.0"
+circuit = { path = "../circuit" }
+rand_chacha.workspace = true
+schnorr = { path = "../schnorr" }

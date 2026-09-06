@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+authors = ["Cian Lalor"]
+
+[workspace.dependencies]
+rand = "0.8"
+sha2 = "0.10"
+rand_chacha = "0.3"

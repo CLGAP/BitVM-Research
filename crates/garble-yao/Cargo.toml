@@ -1,0 +1,13 @@
+[package]
+name = "garble-yao"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+circuit = { path = "../circuit"}
+sha2.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "lamport-sig"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+rand.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true
