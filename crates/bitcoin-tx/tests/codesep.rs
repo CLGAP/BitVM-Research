@@ -68,7 +68,7 @@ fn codesep_makes_slots_distinct() {
     // seperators: slot 0 sentinel, every 3rd opcode after index (3s - 1)
     let slot_leaf = checkgs_leaf(key(2), n);
     let (funding, spender) = fund_and_spend(&secp, key(1), &slot_leaf);
-    let pos = |s: usize| if s == 0 { u32::MAX } else { (3 * s - 1) as u32 };
+    let pos = |s: usize| if s == 0 { u32::MAX } else { u32::try_from(3 * s - 1).unwrap() };
     let m_slot: Vec<_> = (0..n)
         .map(|s| slot_sighash(&spender, 0, &funding.output[0], &slot_leaf, pos(s)))
         .collect();
@@ -99,7 +99,7 @@ fn slot_signature_binds_to_position() {
     let n = 8;
     let slot_leaf = checkgs_leaf(key(2), n);
     let (funding, spender) = fund_and_spend(&secp, key(1), &slot_leaf);
-    let pos = |s: usize| if s == 0 { u32::MAX } else { (3 * s - 1) as u32 };
+    let pos = |s: usize| if s == 0 { u32::MAX } else { u32::try_from(3 * s - 1).unwrap() };
     let m_slot: Vec<_> = (0..n)
         .map(|s| slot_sighash(&spender, 0, &funding.output[0], &slot_leaf, pos(s)))
         .collect();

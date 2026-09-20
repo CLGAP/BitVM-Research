@@ -29,7 +29,7 @@ fn setup(
 }
 
 struct Seam {
-    f: Fixture,
+    f: AssertFixture,
     bond: OutPoint,
     bond_prevout: TxOut,
     p: Projective,
@@ -46,21 +46,22 @@ fn claim_over_assert() -> Seam {
     let mut rng = ChaCha20Rng::seed_from_u64(42);
     let (_, _, e, _, op_sk, p) = setup(&mut rng);
 
-    let f = fixture();
+    let f = assert_fixture();
     let bond = OutPoint::new(Txid::all_zeros(), 0);
-    let assert = assert_tx(bond, BOND, &f.taptree);
+    let assert = assert_tx(bond, FUND, &f.taptree);
 
     let op_key = XOnlyPublicKey::from_keypair(
         &Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[2u8; 32]).unwrap())
     ).0;
     let bond_prevout = TxOut {
-        value: BOND,
+        value: FUND,
         script_pubkey: ScriptBuf::new_p2tr(&secp, op_key, None),
     };
 
     let m = key_spend_sighash(&assert, 0, &bond_prevout).to_byte_array();
+    let ms = [m; 2];
     let x = [true, false];
-    let (pk, pre, claim, _) = claim_and_extract_labels(&e, &op_sk, &x, &m, &mut rng);
+    let (pk, pre, claim, _) = claim_and_extract_labels(&e, &op_sk, &x, &ms, &mut rng);
     Seam { f, bond, bond_prevout, p, m, e, pk, pre, claim, x }
 }
 
@@ -75,7 +76,7 @@ fn assert_reveals_label() {
 #[test]
 fn completion_bound_to_assert() {
     let s = claim_over_assert();
-    let assert2 = assert_tx(s.bond, BOND - Amount::from_sat(1), &s.f.taptree);
+    let assert2 = assert_tx(s.bond, FUND - Amount::from_sat(1), &s.f.taptree);
     let m2 = key_spend_sighash(&assert2, 0, &s.bond_prevout).to_byte_array();
     for sig in &s.claim.sigs { assert!(!schnorr::verify(&s.p, &m2, sig)) }
 }

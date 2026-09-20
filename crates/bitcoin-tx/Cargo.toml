@@ -11,6 +11,7 @@ garble-yao = { path = "../garble-yao" }
 rand.workspace = true
 ark-secp256k1 = "0.4.0"
 ark-std = "0.4"
+schnorr = { path = "../schnorr" }
 
 [dev-dependencies]
 adaptor-sig = { path = "../adaptor-sig" }
@@ -20,3 +21,6 @@ ark-std = "0.4.0"
 circuit = { path = "../circuit" }
 rand_chacha.workspace = true
 schnorr = { path = "../schnorr" }
+
+[lib]
+doctest = false

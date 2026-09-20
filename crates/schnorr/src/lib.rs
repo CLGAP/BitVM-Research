@@ -38,47 +38,36 @@ pub fn to_bytes(sig: &Signature) -> [u8; 64] {
 }
 
 pub fn sign<R: Rng>(x: &PrivateKey, m: &[u8], rng: &mut R) -> Signature {
-    let g = Projective::generator();
-    let k = Fr::rand(rng);
-    let p = g * x;
-    let d = if even_y(&p) { *x } else {-*x};
-    let mut k = k;
-    let mut r = g * k;
-    if !even_y(&r) { k = -k; r =  -r };
-    let e = challenge(&r, &p, m);
-    let s = k + e * d;
-    Signature { r, s }
+    sign_with_nonce(x, m, Fr::rand(rng))
 }
 
-fn even_y(p: &Projective) -> bool {
+pub fn even_y(p: &Projective) -> bool {
     (p.into_affine().y.into_bigint().to_bytes_le()[0] & 1) == 0
+}
+
+pub fn normalize_parity(d: Fr) -> (Fr, Projective) {
+    let p = Projective::generator() * d;
+    if even_y(&p) { (d, p) } else { (-d, -p) }
 }
 
 pub fn verify(p: &PublicKey, m: &[u8], sig: &Signature) -> bool {
     let g = Projective::generator();
-    let e = challenge(&sig.r, &p, m);
+    let e = challenge(&sig.r, p, m);
     let p = if even_y(p) { *p } else { -*p };
     g * sig.s == sig.r + p * e
 }
 
 // e = Hash( R || P || m) as a scalar in field.
 pub fn challenge(r: &Projective, p: &Projective, m: &[u8]) -> Fr {
-    let tag = Sha256::digest(b"BIP0340/challenge"); // is this the exact message hashed
+    let tag = Sha256::digest(b"BIP0340/challenge"); // message hashed
     let mut h = Sha256::new(); 
-    h.update(tag); // is update a checksum i.e., re hash, or just append
-    h.update(tag); // is return type 32 bytes over 64 byte output? (not clear on this , but hence twice, or why is twice in BBitcoi core)
+    h.update(tag); // update appends stream
+    h.update(tag); // appneded twice so it files 64-byte SHA-256 block
     h.update(x_only_bytes(r));
     h.update(x_only_bytes(p));
     h.update(m);
     Fr::from_be_bytes_mod_order(&h.finalize())
 }
-
-// fn point_bytes(p: &Projective) -> Vec<u8> {
-//     let mut buf = Vec::new();
-//     p.into_affine()
-//         .serialize_compressed(&mut buf).expect("point serialization");
-//     buf
-// }
 
 pub fn x_only_bytes(p: &Projective) -> [u8; 32] {
     p.into_affine().x.into_bigint().to_bytes_be().try_into().unwrap()
@@ -86,12 +75,8 @@ pub fn x_only_bytes(p: &Projective) -> [u8; 32] {
 
 // show slashable security with reuse
 pub fn sign_with_nonce(x: &PrivateKey, m: &[u8], k: Fr) -> Signature {
-    let g = Projective::generator();
-    let mut k = k;
-    let mut r = g * k;
-    if !even_y(&r) { k = -k ; r = -r }
-    let p = g * x;
-    let d = if even_y(&p) { *x } else { -*x };
+    let (k, r) = normalize_parity(k);
+    let (d, p) = normalize_parity(*x);
     let e = challenge(&r, &p, m);
     let s = k + e * d;
     Signature { r, s }
@@ -109,7 +94,7 @@ mod tests {
     fn schnorr_roundtrip() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let kp = KeyPair::generate(&mut rng);
-        let m= "Emirates".as_bytes();
+        let m= b"Emirates";
         let sig = sign(&kp.private, m, &mut rng);
         assert!(verify(&kp.public, m, &sig))
     }
@@ -118,16 +103,16 @@ mod tests {
     fn rejects_wrong_message() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let kp = KeyPair::generate(&mut rng);
-        let m= "Emirates".as_bytes();
+        let m= b"Emirates";
         let sig = sign(&kp.private, m, &mut rng);
-        assert!(!verify(&kp.public, &[1 as u8], &sig))
+        assert!(!verify(&kp.public, &[1u8], &sig))
     }
 
     #[test]
     fn rejects_wrong_key() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let kp1 = KeyPair::generate(&mut rng);
-        let m= "Emirates".as_bytes();
+        let m= b"Emirates";
         let sig = sign(&kp1.private, m, &mut rng);
         let kp2 = KeyPair::generate(&mut rng);
         assert_ne!(kp1, kp2);
@@ -138,7 +123,7 @@ mod tests {
     fn rejects_tampered_sig() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let kp = KeyPair::generate(&mut rng);
-        let m= "Emirates".as_bytes();
+        let m= b"Emirates";
         let mut sig = sign(&kp.private, m, &mut rng);
         assert!(verify(&kp.public, m, &sig));
         sig.s += PrivateKey::from(1u32);

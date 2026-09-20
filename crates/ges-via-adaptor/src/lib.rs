@@ -24,11 +24,15 @@ pub fn keygen(e: &EncodingInfo) -> PublicKey {
     }
 }
 
-// toy example only, publishing both pre-sigs enables extraction
-pub fn pre_sign<R: Rng>(x: &Fr, m: &[u8], pk: &PublicKey, rng: &mut R) -> PreSigs {
+pub fn pre_sign<R: Rng>(x: &Fr, ms: &[[u8; 32]], pk: &PublicKey, rng: &mut R) -> PreSigs {
+    assert_eq!(pk.pairs.len(), ms.len());
     PreSigs {
-        pairs: pk.pairs.iter().map(|pair| {
-            let k = Fr::rand(rng);
+        pairs: pk.pairs.iter().zip(ms).map(|(pair, m)| {
+            let k = loop {
+                let k = Fr::rand(rng);
+                let r = Projective::generator() * k;
+                if schnorr::even_y(&(r + pair.zero)) && schnorr::even_y(&(r + pair.one)) { break k; }
+            };   
             Pair {
                 zero: adaptor_sig::pre_sign_with_nonce(x, m, &pair.zero, &k),
                 one: adaptor_sig::pre_sign_with_nonce(x, m, &pair.one, &k),
@@ -57,8 +61,8 @@ pub fn extract_all(pk: &PublicKey, pre: &PreSigs, claim: &Claim) -> Vec<Label> {
 	}}).collect()
 }
 
-pub fn pre_verify_all(p: &Projective, m: &[u8], pk: &PublicKey, pre: &PreSigs) -> bool {
-    pk.pairs.iter().zip(pre.pairs.iter()).all(|(pk_pair, ps_pair)| {
+pub fn pre_verify_all(p: &Projective, ms: &[[u8; 32]], pk: &PublicKey, pre: &PreSigs) -> bool {
+    pk.pairs.iter().zip(pre.pairs.iter()).zip(ms).all(|((pk_pair, ps_pair), m)| {
 	adaptor_sig::pre_verify(p, m, &pk_pair.zero, &ps_pair.zero) && adaptor_sig::pre_verify(p, m, &pk_pair.one, &ps_pair.one)
 	})
 }
@@ -90,21 +94,25 @@ mod tests {
     fn pre_verify_all_accepts_honest() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (_ , _, e, _, op_sk , p) = setup(&mut rng);
-        let m = b"Assert tx";
+        let m = b"Assert tx that is 32 bytes long.";
+        let ms = [*m; 2];
         let pk = keygen(&e);
-        let ps = pre_sign(&op_sk, m, &pk, &mut rng);
-        assert!(pre_verify_all(&p, m, &pk, &ps));
-        assert!(!pre_verify_all(&p, b"other tx", &pk, &ps));
-        assert!(!pre_verify_all(&(p + Projective::generator()), m, &pk, &ps));
+        let ps = pre_sign(&op_sk, &ms, &pk, &mut rng);
+        let m_2 = b"Other assert tx that is 32 long.";
+        let ms_2 = [*m_2; 2];
+        assert!(pre_verify_all(&p, &ms, &pk, &ps));
+        assert!(!pre_verify_all(&p, &ms_2, &pk, &ps));
+        assert!(!pre_verify_all(&(p + Projective::generator()), &ms, &pk, &ps));
     }
 
     #[test]
     fn extractability_extract_equals_en() { 
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (_ , _, e, _, op_sk , _) = setup(&mut rng);
-        let m = b"Assert tx";
+        let m = b"Assert tx that is 32 bytes long.";
+        let ms = [*m; 2];
         let pk = keygen(&e);
-        let pre= pre_sign(&op_sk, m, &pk, &mut rng);
+        let pre= pre_sign(&op_sk, &ms, &pk, &mut rng);
         let x = [true, false];
         let claim = post(&e, &pre, &x);
         let l_x = extract_all(&pk, &pre, &claim);
@@ -115,9 +123,10 @@ mod tests {
     fn end_to_end_eval_and_decode() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (circuit, gc, e, d,  op_sk, _) = setup(&mut rng);
-        let m = b"Assert tx";
+        let m = b"Assert tx that is 32 bytes long.";
+        let ms = [*m; 2];
         let pk = keygen(&e);
-        let pre= pre_sign(&op_sk, m, &pk, &mut rng);
+        let pre= pre_sign(&op_sk, &ms, &pk, &mut rng);
         let x = [true, false];
         let claim = post(&e, &pre, &x);
         let l_x = extract_all(&pk, &pre, &claim);
@@ -129,9 +138,10 @@ mod tests {
     fn equivocation_leaks_operator_secret_key() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (_, _, e, _,  op_sk, p) = setup(&mut rng);
-        let m = b"Assert tx";
+        let m = b"Assert tx that is 32 bytes long.";
+        let ms = [*m; 2];
         let pk = keygen(&e);
-        let pre= pre_sign(&op_sk, m, &pk, &mut rng);
+        let pre= pre_sign(&op_sk, &ms, &pk, &mut rng);
         let ps = &pre.pairs[0];
         let e0 = schnorr::challenge(&(ps.zero.r + pk.pairs[0].zero), &p, m);
         let e1 = schnorr::challenge(&(ps.one.r + pk.pairs[0].one), &p, m);
@@ -145,13 +155,38 @@ mod tests {
         let circuit = circuit::fixtures::xor_and_not();
         let (gc, e, d) = garble_yao::gb(&circuit, &mut rng);
         let op_sk = Fr::rand(&mut rng);
-        let m = b"Assert tx";
+        let m = b"Assert tx that is 32 bytes long.";
+        let ms = [*m; 3];
         let pk = keygen(&e);
-        let pre = pre_sign(&op_sk, m, &pk, &mut rng);
+        let pre = pre_sign(&op_sk, &ms, &pk, &mut rng);
         let x = [true, false, true];
         let claim = post(&e, &pre, &x);
         let l_x = extract_all(&pk, &pre, &claim);
         let l_y = garble_yao::ev(&circuit, &gc, &l_x);
         assert_eq!(garble_yao::de(&d, &l_y), Some(circuit.evaluate(&x)));
+    }
+
+    #[test]
+    fn bip340_matches_secp() {
+        use secp256k1::{Secp256k1, XOnlyPublicKey, Message, schnorr::Signature as SecpSig};
+
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let circuit = circuit::fixtures::xor_and_not();
+        let (_, e, _) = garble_yao::gb(&circuit, &mut rng);
+        let op_sk = Fr::rand(&mut rng);
+        let op_pk = XOnlyPublicKey::from_slice(&schnorr::x_only_bytes(&(Projective::generator() * op_sk))).unwrap();
+        let m = b"Assert tx that is 32 bytes long.";
+        let ms = [*m; 3];
+        let pk = keygen(&e);
+        let pre = pre_sign(&op_sk, &ms, &pk, &mut rng);
+        let x = [true, false, true];
+        let claim = post(&e, &pre, &x);
+        for sig in claim.sigs {
+            let ssig = SecpSig::from_slice(&schnorr::to_bytes(&sig)).unwrap();
+            assert!(Secp256k1::verification_only().verify_schnorr(
+                &ssig,
+                &Message::from_digest(*m),
+                &op_pk).is_ok());
+        }
     }
 }

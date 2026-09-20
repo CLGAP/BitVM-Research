@@ -8,11 +8,13 @@ authors.workspace = true
 ark-secp256k1 = "0.4.0"
 ark-ec = "0.4"
 ark-ff = "0.4"
-ark-serialize = "0.4"
 ark-std = "0.4"
 sha2 = { workspace = true }
 rand = { workspace = true }
-secp256k1 = "0.29"
 
 [dev-dependencies]
+secp256k1 = "0.29"
 rand_chacha = { workspace = true }
+
+[lib]
+doctest = false

@@ -15,21 +15,28 @@ pub struct PreSignature {
 pub fn pre_sign_with_nonce(x: &Fr, m: &[u8], t: &Statement, k: &Fr) -> PreSignature {
     let g = Projective::generator();
     let r = g * k;
-    let p =  g * x;
+    let (d, p ) = schnorr::normalize_parity(*x);
     let e = schnorr::challenge(&(r + t), &p, m);
-    let s_t =  *k + e * x;
+    let s_t =  *k + e * d;
     PreSignature { r, s_t }
 }
 
 pub fn pre_sign<R: Rng>(x: &Fr, m: &[u8], t: &Statement, rng: &mut R) -> PreSignature {
-    let k = Fr::rand(rng);
+    let g = Projective::generator();
+    let k = loop {
+        let k = Fr::rand(rng);
+        if schnorr::even_y( &(g * k + t)) {
+            break k;
+        }
+    };
     pre_sign_with_nonce(x, m, t, &k)
 }
 
 pub fn pre_verify(p: &Projective, m: &[u8], t: &Statement, ps: &PreSignature) -> bool {
     let g = Projective::generator();
+    let p = if schnorr::even_y(p) {*p} else {-*p};
     let e = schnorr::challenge(&(ps.r + t), &p, m);
-    g * ps.s_t == ps.r + *p * e
+    g * ps.s_t == ps.r + p * e
 }
 
 pub fn adapt(ps: &PreSignature, witness: &Fr) -> Signature {
@@ -41,7 +48,7 @@ pub fn extract(ps: &PreSignature, sig: &Signature) -> Witness {
 }
 
 #[cfg(test)]
-mod  tests {
+mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
     use super::*;
@@ -120,4 +127,23 @@ mod  tests {
         // assert below proves atomocity of leak of witness
         assert!(schnorr::verify(&kp_bob.public, m_b, &sig_b));
     }
+
+    #[test]
+   fn bip340_matches_secp() {
+        use secp256k1::{Secp256k1, XOnlyPublicKey, Message, schnorr::Signature as SecpSig};
+        
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let kp = schnorr::KeyPair::generate(&mut rng);
+        let m = b"Thiry-two byte message standard.";
+        let witness = Fr::rand(&mut rng);
+        let t = Projective::generator() * witness;
+        let presig = pre_sign(&kp.private, m, &t, &mut rng);
+        let sig = adapt(&presig, &witness);
+        let pk = XOnlyPublicKey::from_slice(&schnorr::x_only_bytes(&kp.public)).unwrap();
+        let ssig = SecpSig::from_slice(&schnorr::to_bytes(&sig)).unwrap();
+        assert!(Secp256k1::verification_only().verify_schnorr(
+            &ssig,
+            &Message::from_digest(*m),
+            &pk).is_ok());
+   } 
 }
