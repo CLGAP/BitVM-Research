@@ -12,3 +12,5 @@ sha2.workspace = true
 [dev-dependencies]
 circuit = { path = "../circuit" }
 rand_chacha.workspace = true
+[lib]
+doctest = false

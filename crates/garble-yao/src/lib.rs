@@ -53,7 +53,7 @@ pub fn gb<R: Rng>(circuit: &Circuit, rng: &mut R) -> (GarbledCircuit, EncodingIn
 
     let mut garbled_circuit: Vec<GarbledGate> = Vec::with_capacity(circuit.gates.len());
     for (gate_idx, gate) in circuit.gates.iter().enumerate() {
-        let nu = (gate_idx as i32).to_le_bytes(); //nonce
+        let nu = (i32::try_from(gate_idx).unwrap()).to_le_bytes(); //nonce
         let mut ciphertext: Vec<Ciphertext> = Vec::new();
 
         match gate {
@@ -92,7 +92,7 @@ pub fn gb<R: Rng>(circuit: &Circuit, rng: &mut R) -> (GarbledCircuit, EncodingIn
             Gate::Not { input, output } => {
                 for i in [false, true] {
                     let k_1 = if i { wire_pairs[*input].one } else { wire_pairs[*input].zero };
-                    let m_label = if !i { wire_pairs[*output].one } else { wire_pairs[*output].zero };
+                    let m_label = if i { wire_pairs[*output].zero } else { wire_pairs[*output].one };
 
                     let hash: [u8; 48] = Sha384::new().chain_update(k_1).chain_update(nu).finalize().into();
                     let mut plaintext = [0u8; 48];
@@ -124,7 +124,7 @@ pub fn ev(circuit: &Circuit, gc: &GarbledCircuit, l_x: &[Label]) -> Vec<Label> {
     }
 
     for (gate_idx, gate) in circuit.gates.iter().enumerate() {
-        let nu = (gate_idx as i32).to_le_bytes();
+        let nu = (i32::try_from(gate_idx).unwrap()).to_le_bytes();
         let garbled = &gc.gates[gate_idx];
 
         match gate {
@@ -180,7 +180,7 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (gc, e, d) = gb(&circuit, &mut rng);
 
-        for (a, b) in [(false, false), (false, true), (true, false), (true, true)] {
+        for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
             let l_x = en(&e, &[a, b]);
             let l_y = ev(&circuit, &gc, &l_x);
             let y = de(&d, &l_y).expect("Correct decoding never returns None");
@@ -194,7 +194,7 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (gc, e, d) = gb(&circuit, &mut rng);
         
-        for (a, b) in [(false, false), (false, true), (true, false), (true, true)] {
+        for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
             let l_x = en(&e, &[a, b]);
             let l_y = ev(&circuit, &gc, &l_x);
             let y = de(&d, &l_y).expect("Correct decoding never returns None");
@@ -208,11 +208,11 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (gc, e, d) = gb(&circuit, &mut rng);
         
-        for (a, b, c) in [
-            (false, false, false), (false, false, true),
-            (false, true, false),  (false, true, true),
-            (true, false, false),  (true, false, true),
-            (true, true, false),   (true, true, true),
+        for [a, b, c] in [
+            [false, false, false], [false, false, true],
+            [false, true, false],  [false, true, true],
+            [true, false, false],  [true, false, true],
+            [true, true, false],   [true, true, true],
             ] {
             let l_x = en(&e, &[a, b, c]);
             let l_y = ev(&circuit, &gc, &l_x);
@@ -227,13 +227,13 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (gc, e, d) = gb(&circuit, &mut rng);
         
-        for (a, b, c) in [
-            (false, false, false), (false, false, true),
-            (false, true, false),  (false, true, true),
-            (true, false, false),  (true, false, true),
-            (true, true, false),   (true, true, true),
+        for x in [
+            [false, false, false], [false, false, true],
+            [false, true, false],  [false, true, true],
+            [true, false, false],  [true, false, true],
+            [true, true, false],   [true, true, true],
             ] {
-            let l_x = en(&e, &[a, b, c]);
+            let l_x = en(&e, &x);
             let mut l_y = ev(&circuit, &gc, &l_x);
             l_y[0] = [0; 32];
             assert_eq!(de(&d, &l_y), None);
@@ -247,7 +247,7 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (gc, e, d) = gb(&circuit, &mut rng);
         
-        for (a, b) in [(false, false), (false, true), (true, false), (true, true)] {
+        for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
             let l_x = en(&e, &[a, b]);
             let mut l_y = ev(&circuit, &gc, &l_x);
             l_y[0] = [0; 32];

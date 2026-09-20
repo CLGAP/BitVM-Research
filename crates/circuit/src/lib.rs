@@ -21,7 +21,7 @@ impl Circuit {
         })
         .chain(input_wires.iter().copied())
         .chain(output_wires.iter().copied())
-        .max().map(|m| m + 1).unwrap_or(0);
+        .max().map_or(0,|m| m + 1);
 
         Self { num_wires, input_wires, output_wires, gates }
     }
