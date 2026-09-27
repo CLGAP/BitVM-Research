@@ -1,12 +1,11 @@
 use ark_ec::{CurveGroup, Group};
 use ark_ff::{PrimeField, BigInteger};
-use ark_secp256k1::{Fr, Projective};
+use ark_secp256k1::{Fr, Projective, Affine, Fq};
 use ark_std::{rand::Rng, UniformRand};
 use sha2::{Sha256, Digest};
 
 pub type PrivateKey = Fr;
 pub type PublicKey = Projective;
-pub type XOnlyPubKey = [u8; 32];
 
 pub struct Signature {
     pub r: Projective, // R = [k]G
@@ -37,6 +36,15 @@ pub fn to_bytes(sig: &Signature) -> [u8; 64] {
     out
 }
 
+pub fn sig_from_bytes(b: &[u8;64]) -> Option<Signature> {
+    let x = Fq::from_be_bytes_mod_order(&b[..32]);
+    let a = Affine::get_point_from_x_unchecked(x, false)?;
+    let p: Projective = a.into(); 
+    let r = if even_y(&p) { p } else { -p };
+    let s = Fr::from_be_bytes_mod_order(&b[32..]);
+    Some(Signature { r, s })
+}
+
 pub fn sign<R: Rng>(x: &PrivateKey, m: &[u8], rng: &mut R) -> Signature {
     sign_with_nonce(x, m, Fr::rand(rng))
 }
@@ -54,7 +62,7 @@ pub fn verify(p: &PublicKey, m: &[u8], sig: &Signature) -> bool {
     let g = Projective::generator();
     let e = challenge(&sig.r, p, m);
     let p = if even_y(p) { *p } else { -*p };
-    g * sig.s == sig.r + p * e
+    g * sig.s == sig.r + p * e && even_y(&sig.r)
 }
 
 // e = Hash( R || P || m) as a scalar in field.
@@ -156,5 +164,20 @@ mod tests {
         let ssig = SecpSig::from_slice(&to_bytes(&sig)).unwrap();
         let secp = Secp256k1::verification_only();
         assert!(secp.verify_schnorr(&ssig, &Message::from_digest(m), &pk).is_ok());
+    }
+
+    #[test]
+    fn from_bytes_must_lift_even_y() {
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let kp = KeyPair::generate(&mut rng);
+        let m = b"deserialization boundary";
+        let sig = sign(&kp.private, m, &mut rng);
+
+        let errant_root = Signature { r: -sig.r, s: sig.s };
+        assert_eq!(to_bytes(&sig), to_bytes(&errant_root));
+        assert!(!verify(&kp.public, m, &errant_root));
+        
+        let parsed = sig_from_bytes(&to_bytes(&sig)).unwrap();
+        assert!(verify(&kp.public, m, &parsed));
     }
 }

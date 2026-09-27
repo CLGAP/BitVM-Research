@@ -3,7 +3,9 @@ use bitcoin::opcodes::all::{OP_SHA256, OP_EQUAL, OP_CSV, OP_DROP, OP_CHECKSIG, O
 use garble_yao::{EncodingInfo, Label};
 use ges_via_adaptor::{keygen, pre_sign, post, extract_all, Claim, PreSigs, PublicKey};
 use ark_std::rand::Rng;
-use ark_secp256k1::Fr;
+use ark_secp256k1::{Fr, Projective};
+use ark_ec::Group;
+
 pub struct AssertTaptree {
     pub spend_info: TaprootSpendInfo,
     pub challenge: ScriptBuf, // hashlock
@@ -37,9 +39,10 @@ fn timeout_leaf(t: u16, pk: XOnlyPublicKey) -> ScriptBuf {
         .into_script()
 }
 
-// n-slot per digit-leaf: ( <pk_slot> CHECKSIGVERIFY CODESEPERATOR) x n
+// n-slot per digit-leaf: ( <pk_slot> CHECKSIGVERIFY CODESEPERATOR) x (n - 1)
 // pk_slot: jointly generated at setup, secrete shares deleted; nobody can fresh-sign
 pub fn checkgs_leaf(pk_slot: XOnlyPublicKey, n: usize) -> ScriptBuf {
+    assert!(n >= 1, "CheckGS leaf needs at least one slot");
     let mut b = Builder::new();
     for _ in 0..n-1 {
         b = b.push_x_only_key(&pk_slot).push_opcode(OP_CHECKSIGVERIFY).push_opcode(OP_CODESEPARATOR)
@@ -176,6 +179,8 @@ pub fn key_spend_sighash(tx: &Transaction, i: usize, prevout: &TxOut) -> TapSigh
 pub fn claim_and_extract_labels<R: Rng>(e: &EncodingInfo, op_sk: &Fr, pi: &[bool], sighashes: &[[u8; 32]], rng: &mut R) -> (PublicKey, PreSigs, Claim, Vec<Label>) {
     let pk = keygen(e);
     let pre = pre_sign(op_sk, sighashes, &pk, rng);
+    assert!(ges_via_adaptor::pre_verify_all(&(Projective::generator() * *op_sk), sighashes, &pk, &pre),
+            "pre-signatures fail pre verification: issue with pre-signing");
     let claim = post(e, &pre, pi);
     let l_pi = extract_all(&pk, &pre, &claim);
     (pk, pre, claim, l_pi)

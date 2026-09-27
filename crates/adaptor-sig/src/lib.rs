@@ -12,31 +12,37 @@ pub struct PreSignature {
     pub s_t: Fr
 }
 
-pub fn pre_sign_with_nonce(x: &Fr, m: &[u8], t: &Statement, k: &Fr) -> PreSignature {
+#[derive(Debug, PartialEq)]
+pub enum PreSignError {
+    /// R + T has odd y. BIP340 stores only the x-cordinate of the nonce 
+    /// point; verifiers reconstruct the even-y point for that x (each x
+    /// holds one even and one odd). A signature completed from this pre-
+    /// signature would therefore be checked against the mirror point 
+    /// (x, p - y) and be rejected by Bitcoin consensus check.  
+    OddParity,
+}
+
+pub fn pre_sign_with_nonce(x: &Fr, m: &[u8], t: &Statement, k: &Fr) -> Result<PreSignature, PreSignError> {
     let g = Projective::generator();
     let r = g * k;
+    if !schnorr::even_y(&(r + t)) { return Err(PreSignError::OddParity); }
     let (d, p ) = schnorr::normalize_parity(*x);
     let e = schnorr::challenge(&(r + t), &p, m);
     let s_t =  *k + e * d;
-    PreSignature { r, s_t }
+    Ok( PreSignature { r, s_t } )
 }
 
 pub fn pre_sign<R: Rng>(x: &Fr, m: &[u8], t: &Statement, rng: &mut R) -> PreSignature {
-    let g = Projective::generator();
-    let k = loop {
-        let k = Fr::rand(rng);
-        if schnorr::even_y( &(g * k + t)) {
-            break k;
-        }
-    };
-    pre_sign_with_nonce(x, m, t, &k)
+    loop {
+        if let Ok(ps) = pre_sign_with_nonce(x, m, t, &Fr::rand(rng)) { return ps; }
+    }
 }
 
 pub fn pre_verify(p: &Projective, m: &[u8], t: &Statement, ps: &PreSignature) -> bool {
     let g = Projective::generator();
     let p = if schnorr::even_y(p) {*p} else {-*p};
     let e = schnorr::challenge(&(ps.r + t), &p, m);
-    g * ps.s_t == ps.r + p * e
+    g * ps.s_t == ps.r + p * e && schnorr::even_y(&(ps.r + t))
 }
 
 pub fn adapt(ps: &PreSignature, witness: &Fr) -> Signature {
@@ -60,10 +66,12 @@ mod tests {
         let m = b"asdfasdf";
         let witness = Fr::rand(&mut rng);
         let t = Projective::generator() * witness;
-        let k = Fr::rand(&mut rng);
-
-        let ps1 = pre_sign_with_nonce(&kp.private, m, &t, &k);
-        let ps2 = pre_sign_with_nonce(&kp.private, m, &t, &k);
+        let k = loop {
+            let k = Fr::rand(&mut rng);
+            if schnorr::even_y(&(Projective::generator() * k + t)) { break k ; }
+        };
+        let ps1 = pre_sign_with_nonce(&kp.private, m, &t, &k).unwrap();
+        let ps2 = pre_sign_with_nonce(&kp.private, m, &t, &k).unwrap();
         assert_eq!(ps1, ps2);
         assert!(pre_verify(&kp.public, m, &t, &ps1));
     }
@@ -77,6 +85,36 @@ mod tests {
         let t = Projective::generator() * witness;
         let ps = pre_sign(&kp.private, m, &t, &mut rng);
         assert!(pre_verify(&kp.public, m, &t, &ps))
+    }
+
+    #[test]
+    fn pre_verify_rejects_odd_adapted_nonce() {
+        use secp256k1::{Secp256k1, XOnlyPublicKey, Message, schnorr::Signature as SecpSig};
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let kp = schnorr::KeyPair::generate(&mut rng);
+        let m = b"Thirty-two byte message standard";
+        let witness = Fr::rand(&mut rng);
+        let t = Projective::generator() * witness;
+        let k = loop {
+            let k = Fr::rand(&mut rng);
+            if !schnorr::even_y(&(Projective::generator() * k + t)) { break k; }
+        };
+        assert_eq!(
+            pre_sign_with_nonce(&kp.private, m, &t, &k),
+            Err(PreSignError::OddParity)
+        );
+
+        let r = Projective::generator() * k;
+        let (d, p) = schnorr::normalize_parity(kp.private);
+        let e = schnorr::challenge(&(r + t), &p, m);
+        let ps = PreSignature { r, s_t: k + e * d };
+        assert!(!pre_verify(&kp.public, m, &t, &ps));
+
+        let sig = adapt(&ps, &witness);
+        assert!(!schnorr::verify(&kp.public, m, &sig));
+        let pk = XOnlyPublicKey::from_slice(&schnorr::x_only_bytes(&kp.public)).unwrap();
+        let ssig = SecpSig::from_slice(&schnorr::to_bytes(&sig)).unwrap();
+        assert!(Secp256k1::verification_only().verify_schnorr(&ssig, &Message::from_digest(*m), &pk).is_err());
     }
 
     #[test]

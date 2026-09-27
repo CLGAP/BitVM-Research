@@ -27,6 +27,15 @@ use bitcoin_tx::*;
 mod common;
 use common::*;
 
+#[test] 
+#[ignore = "regtest: validates the zsh scripts values against the .rs source of truth"]
+fn print_params() {
+    let f = assert_fixture();
+    println!("FUND_SAT={}", FUND.to_sat());
+    println!("FEE_SAT={}", FEE.to_sat());
+    println!("CSV_T={}", f.t);
+}
+
 
 #[test]
 #[ignore = "regtest: prints the bonded taptree address to fund"]

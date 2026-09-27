@@ -12,15 +12,14 @@ rand.workspace = true
 ark-secp256k1 = "0.4.0"
 ark-std = "0.4"
 schnorr = { path = "../schnorr" }
+ark-ec = "0.4.0"
 
 [dev-dependencies]
 adaptor-sig = { path = "../adaptor-sig" }
 ark-ec = "0.4.0"
 ark-ff = "0.4.0"
-ark-std = "0.4.0"
 circuit = { path = "../circuit" }
 rand_chacha.workspace = true
-schnorr = { path = "../schnorr" }
 
 [lib]
 doctest = false
