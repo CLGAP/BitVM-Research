@@ -5,7 +5,6 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-lamport-sig = { path = "../lamport-sig" }
 garble-yao  = { path = "../garble-yao" }
 sha2.workspace = true
 

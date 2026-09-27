@@ -28,14 +28,9 @@ pub fn pre_sign<R: Rng>(x: &Fr, ms: &[[u8; 32]], pk: &PublicKey, rng: &mut R) ->
     assert_eq!(pk.pairs.len(), ms.len());
     PreSigs {
         pairs: pk.pairs.iter().zip(ms).map(|(pair, m)| {
-            let k = loop {
+            loop {
                 let k = Fr::rand(rng);
-                let r = Projective::generator() * k;
-                if schnorr::even_y(&(r + pair.zero)) && schnorr::even_y(&(r + pair.one)) { break k; }
-            };   
-            Pair {
-                zero: adaptor_sig::pre_sign_with_nonce(x, m, &pair.zero, &k),
-                one: adaptor_sig::pre_sign_with_nonce(x, m, &pair.one, &k),
+                if let (Ok(zero), Ok(one)) = (adaptor_sig::pre_sign_with_nonce(x, m, &pair.zero, &k), adaptor_sig::pre_sign_with_nonce(x, m, &pair.one, &k)) { break Pair { zero, one }; }
             }
         }).collect()
     }    
