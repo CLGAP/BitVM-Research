@@ -27,14 +27,14 @@ struct Seam {
 fn claim_over_bond() -> Seam {
     let mut rng = ChaCha20Rng::seed_from_u64(42);
     let f = assert_fixture();
-    let bf = bond_fixture();
+    let bf = bond_fixture(W);
     let p = Projective::generator() * bf.op_sk;
 
     let bond = OutPoint::new(Txid::all_zeros(), 0);
     let assert = assert_tx(bond, FUND, &f.taptree);
     let bond_prevout = TxOut { value: FUND, script_pubkey: bf.taptree.output.clone() };
 
-    let ms = slot_sighashes(&assert, 0, &bond_prevout, &bf.taptree.gs, 2);
+    let ms = slot_sighashes(&assert, 0, &bond_prevout, &bf.taptree.gs, bf.e.input_pairs.len() / W);
     let x = [true, false];
     let (pk, pre, claim, _) = claim_and_extract_labels(&bf.e, &bf.op_sk, &x, &ms, &mut rng);
     Seam { f, bond, bond_prevout, gs: bf.taptree.gs, p, ms, e: bf.e, pk, pre, claim, x }
@@ -53,11 +53,11 @@ fn assert_reveals_label() {
 fn completion_bound_to_assert() {
     let s = claim_over_bond();
     let assert2 = assert_tx(s.bond, FUND - Amount::from_sat(1), &s.f.taptree);
-    let ms2 = slot_sighashes(&assert2, 0, &s.bond_prevout, &s.gs, 2);
+    let ms2 = slot_sighashes(&assert2, 0, &s.bond_prevout, &s.gs, s.ms.len());
     for (sig, m2) in s.claim.sigs.iter().zip(&ms2) { assert!(!schnorr::verify(&s.p, m2, sig)) }
 
     let bond2 = OutPoint::new(Txid::from_byte_array([1u8; 32]), 1);
     let assert3 = assert_tx(bond2, FUND, &s.f.taptree);
-    let ms3 = slot_sighashes(&assert3, 0, &s.bond_prevout, &s.gs, 2);
+    let ms3 = slot_sighashes(&assert3, 0, &s.bond_prevout, &s.gs, s.ms.len());
     for (sig, m3) in s.claim.sigs.iter().zip(&ms3) { assert!(!schnorr::verify(&s.p, m3, sig))}
 }

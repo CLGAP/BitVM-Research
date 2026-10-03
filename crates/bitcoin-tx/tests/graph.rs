@@ -108,7 +108,7 @@ fn timeout_sig_verifies() {
 
 #[test]
 fn bond_tree_has_single_checkgs_leaf() {
-    let f = bond_fixture();
+    let f = bond_fixture(W);
     assert_eq!(f.taptree.spend_info.script_map().len(), 1);
     assert!(f.taptree.output.is_p2tr());
     assert!(f.taptree.spend_info.script_map().contains_key(&(f.taptree.gs.clone(), LeafVersion::TapScript)));
