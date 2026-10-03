@@ -1,10 +1,11 @@
-use bitcoin::{script::Builder, secp256k1::{Secp256k1, Verification, XOnlyPublicKey}, key::UntweakedPublicKey, ScriptBuf, taproot::{TaprootBuilder, TaprootSpendInfo, LeafVersion, TapLeafHash}, Transaction, transaction::{Version}, OutPoint, Amount, absolute::LockTime, TxIn, TxOut, Sequence, Witness, sighash::{Prevouts, SighashCache}, TapSighash, TapSighashType, hashes::Hash};
+use bitcoin::{script::Builder, secp256k1::{Secp256k1, Verification, XOnlyPublicKey}, key::UntweakedPublicKey, ScriptBuf, taproot::{TaprootBuilder, TaprootSpendInfo, LeafVersion, TapLeafHash}, Transaction, transaction::{Version}, OutPoint, Amount, absolute::LockTime, TxIn, TxOut, Sequence, Witness, sighash::{Prevouts, SighashCache}, TapSighash, TapSighashType, hashes::{sha256, Hash}};
 use bitcoin::opcodes::all::{OP_SHA256, OP_EQUAL, OP_CSV, OP_DROP, OP_CHECKSIG, OP_CHECKSIGVERIFY, OP_CODESEPARATOR};
 use garble_yao::{EncodingInfo, Label};
 use ges_via_adaptor::{keygen, pre_sign, post, extract_all, Claim, PreSigs, PublicKey};
 use ark_std::rand::Rng;
 use ark_secp256k1::{Fr, Projective};
 use ark_ec::Group;
+use std::str::FromStr;
 
 pub struct AssertTaptree {
     pub spend_info: TaprootSpendInfo,
@@ -48,6 +49,23 @@ pub fn checkgs_leaf(pk_slot: XOnlyPublicKey, n: usize) -> ScriptBuf {
         b = b.push_x_only_key(&pk_slot).push_opcode(OP_CHECKSIGVERIFY).push_opcode(OP_CODESEPARATOR)
     }
     b.push_x_only_key(&pk_slot).push_opcode(OP_CHECKSIG).into_script()
+}
+
+pub fn derive_nums(tag: &str) -> XOnlyPublicKey {
+    for c in 0u8.. {
+        let digest = sha256::Hash::hash(&[tag.as_bytes(), &[c]].concat());
+        if let Ok(pk) = XOnlyPublicKey::from_slice(&digest.to_byte_array()) { return pk; }
+    }
+    unreachable!()
+}
+
+// Value in `nums_internal_key` is an output of `derive_nums` with tag "BitVM-Research/NUMS/v1"
+// shell command (from root) `cargo test -p bitcoin-tx print_nums -- --ignored --nocapture`
+// ```running 1 test
+// a3b5d1bc9aa6a83e01099fff6b673f8c55baf4f18f3abcbadaf017a89aae629b
+// test tests::print_nums ... ok```
+pub fn nums_internal_key() -> UntweakedPublicKey {
+    XOnlyPublicKey::from_str("a3b5d1bc9aa6a83e01099fff6b673f8c55baf4f18f3abcbadaf017a89aae629b").unwrap()
 }
 
 pub fn build_assert_taptree(secp: &Secp256k1<impl Verification>, internal_key: UntweakedPublicKey, h: [u8; 32], t: u16, pk_op: XOnlyPublicKey) -> AssertTaptree {
@@ -218,4 +236,19 @@ pub fn attach_assert_witness(tx: &mut Transaction, tree: &BondTaptree, sigs: &[s
     witness.push(tree.gs.as_bytes());
     witness.push(control_block.serialize());
     tx.input[0].witness = witness;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{derive_nums, nums_internal_key};
+    #[test]
+    #[ignore = "NUMS point: prints a NUMS constant, return passed in `nums_internal_key`"]
+    fn print_nums() {
+        println!("{}", derive_nums("BitVM-Research/NUMS/v1"));
+    }
+
+    #[test]
+    fn nums_matches_derivation() {
+        assert_eq!(derive_nums("BitVM-Research/NUMS/v1"), nums_internal_key());
+    }
 }

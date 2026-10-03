@@ -23,7 +23,9 @@ use bitcoin::{
     Address, Amount, Network, OutPoint, ScriptBuf, TxOut, Txid,
 };
 use bitcoin_tx::*;
-
+use ges_via_adaptor::wide::{wide_setup, wide_pre_verify, wide_post, wide_extract};
+use ark_ec::Group;
+use ark_secp256k1::Projective;
 mod common;
 use common::*;
 
@@ -50,7 +52,8 @@ fn print_fund_address() {
 #[test]
 #[ignore = "regtest: prints the bond (CheckGS) address to fund"]
 fn print_bond_address() {
-    let f = bond_fixture();
+    let f = bond_fixture(W);
+    save_bond_state(&std::env::var("BOND_STATE").unwrap_or("bond_state.bin".into()), &f, W);
     let addr = Address::from_script(&f.taptree.output, Network::Regtest)
         .expect("tapree output is valid p2tr script");
     println!("\nFUND THIS ADDRESS (regtest):\n{addr}\n");
@@ -122,7 +125,7 @@ fn print_assert_hex() {
 
     let txid: Txid = std::env::var("BOND_TXID").expect("set BOND_TXID").parse().unwrap();
     let vout: u32 = std::env::var("BOND_VOUT").expect("set BOND_VOUT").parse().unwrap();
-    let bf = bond_fixture();
+    let bf = load_bond_state(&std::env::var("BOND_STATE").unwrap_or("bond_state.bin".into()));
     let af = assert_fixture();
 
     // Assert spends the bond outpoint, creates the challenge/timeout tree.
@@ -130,15 +133,19 @@ fn print_assert_hex() {
     // What the bond UTXO looks like on-chain (sighash commits to it).
     let prevout = TxOut { value: FUND, script_pubkey: bf.taptree.output.clone() };
 
-    let sighashes = slot_sighashes(&assert, 0, &prevout, &bf.taptree.gs, 2);
+    let sighashes = slot_sighashes(&assert, 0, &prevout, &bf.taptree.gs, bf.e.input_pairs.len() / W);
 
     // pi = the claimed input bits; completions release exactly those labels.
     let mut rng = ChaCha20Rng::seed_from_u64(7);
-    let (_pk, _pre, claim, _labels) =
-        claim_and_extract_labels(&bf.e, &bf.op_sk, &[true, false], &sighashes, &mut rng);
-
+    let (setup, secrets) = wide_setup(&bf.e, &mut rng, W, &sighashes, &bf.op_sk);
+    assert!(wide_pre_verify(&setup, &sighashes, &(Projective::generator() * bf.op_sk)));
+    let x = [true, false];
+    let sigs = wide_post(&secrets, &x, &setup);
+    let labels = wide_extract(&setup, &sigs);
+    assert_eq!(labels, garble_yao::en(&bf.e, &x));
     let mut assert = assert;
-    attach_assert_witness(&mut assert, &bf.taptree, &claim.sigs);
+    attach_assert_witness(&mut assert, &bf.taptree, &sigs);
+    
     println!("ASSERT_HEX={}", serialize_hex(&assert));
 }
 

@@ -2,13 +2,27 @@ use circuit::{Circuit, Gate};
 use rand::{Rng, seq::SliceRandom};
 use sha2::{Digest, Sha384};
 
-// Label: 32 bytes (k = 256; top byte forced to zero at sampling, so 248 bits of
-// entropy and every label < the secp256k1 group order, keeping the label-to-scalar
-// map of the adaptor bridge injective and reversible). Pad t = 128 bits.
+// Label: 32 bytes (k = 256; rejection-sampled below the secp256k1 group order,
+// so every label is its own scalar and the label-to-scalar map of the adaptor
+// bridge is injective and invertible). Pad t = 128 bits.
 // Ciphertext row = label || 0^16 = 48 bytes. SHA-384 outputs exactly 48 bytes, so its whole
 // output is the keystream (k + t = 256 + 128); no bytes discarded.
 pub type Label = [u8; 32];
 pub type Ciphertext = [u8; 48];
+
+// secp256k1 group order n, stored least-significant byte first (labels are read
+// little-endian by the adaptor bridge). Big-endian value:
+//   n = FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE BAAEDCE6 AF48A03B BFD25E8C D0364141
+//     = 115792089237316195423570985008687907852837564279074904382605163141518161494337
+// (slightly below 2^256; n has no compact power form -- that belongs to the
+// base-field prime p = 2^256 - 2^32 - 977)
+// Source: SEC 2 v2.0, §2.4.1, https://www.secg.org/sec2-v2.pdf (also BIP340).
+pub const N_LE: [u8; 32] = [
+    0x41, 0x41, 0x36, 0xD0, 0x8C, 0x5E, 0xD2, 0xBF,
+    0x3B, 0xA0, 0x48, 0xAF, 0xE6, 0xDC, 0xAE, 0xBA,
+    0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+];
 #[derive(Clone)]
 pub struct LabelPair {
     pub zero: Label, // L^0
@@ -34,14 +48,8 @@ pub struct GarbledCircuit {
 pub fn gb<R: Rng>(circuit: &Circuit, rng: &mut R) -> (GarbledCircuit, EncodingInfo, DecodingInfo) {
     let mut wire_pairs: Vec<LabelPair> = Vec::with_capacity(circuit.num_wires);
     for _ in 0..circuit.num_wires {
-       let mut zero = [0u8; 32];
-       let mut one = [0u8; 32];
-       rng.fill_bytes(&mut zero);
-       rng.fill_bytes(&mut one);
-       // Zero the top byte (last, little-endian): labels then lie below 2^248 (under the secp256k1 curve order, i.e., 2^(31 * 8 bits) < 2^(32 * 8 bits))
-       // therefore, the adaptor bridge's label <> scalar mapping never reduces mod n and is invertible. Costs 4 bits of margin (kanagroo is the swrt of the interval).
-       zero[31] = 0;
-       one[31] = 0;
+       let zero = sample_label(rng);
+       let one = sample_label(rng);
        wire_pairs.push(LabelPair { zero, one } );
     }
 
@@ -108,6 +116,23 @@ pub fn gb<R: Rng>(circuit: &Circuit, rng: &mut R) -> (GarbledCircuit, EncodingIn
     }
     let gc = GarbledCircuit { gates: garbled_circuit };
     (gc, e, d)    
+}
+
+// Rejection sampling: draw 32 uniform bytes, keep only values below the group
+// order n (draws >= n are discarded, a ~2^-127 sliver). Labels then span
+// essentially all of Z_n, so the witness interval is full width (~2^128
+// kangaroo cost) and reading a label as a scalar never reduces mod n.
+fn sample_label<R: Rng>(rng: &mut R) -> Label {
+   loop {
+        let mut label = [0u8; 32];
+        rng.fill_bytes(&mut label);
+        if below_order(&label) { break label ; }
+    }
+}
+
+// Lexicographic compare against N_LE from the most significant byte (index 31,
+fn below_order(l: &Label) -> bool {
+    l.iter().rev().lt(N_LE.iter().rev())
 }
 
 pub fn en(e: &EncodingInfo, x: &[bool]) -> Vec<Label> {
@@ -253,5 +278,14 @@ mod tests {
             l_y[0] = [0; 32];
             assert!(de(&d, &l_y).is_none(), "for inputs ({}, {})", a, b);
         }
+    }
+
+    #[test]
+    fn below_order_boundary() {
+        assert!(!below_order(&[0xFF; 32]));
+        assert!(!below_order(&N_LE));
+        let mut n_le_min_1 = N_LE;
+        n_le_min_1[0] = 0x40;
+        assert!(below_order(&n_le_min_1));
     }
 }

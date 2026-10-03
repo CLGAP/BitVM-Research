@@ -6,7 +6,7 @@ use schnorr::Signature;
 pub type Statement = Projective; // T
 pub type Witness = Fr;           // t, secret the signature will reveal
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct PreSignature {
     pub r: Projective,
     pub s_t: Fr
