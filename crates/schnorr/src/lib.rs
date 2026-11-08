@@ -1,7 +1,7 @@
 use ark_ec::{CurveGroup, Group};
 use ark_ff::{PrimeField, BigInteger};
 use ark_secp256k1::{Fr, Projective, Affine, Fq};
-use ark_std::{rand::Rng, UniformRand};
+use ark_std::{rand::Rng, UniformRand, Zero};
 use sha2::{Sha256, Digest};
 
 pub type PrivateKey = Fr;
@@ -37,6 +37,10 @@ pub fn to_bytes(sig: &Signature) -> [u8; 64] {
 }
 
 pub fn sig_from_bytes(b: &[u8;64]) -> Option<Signature> {
+    // BIP-340 Verify: fails if r >= p (field order) or s >= n (ECG order)
+    // As fixed-width big-endian, lexicographic < is < relation on integers.
+    if b[..32] >= Fq::MODULUS.to_bytes_be()[..] {return None }
+    if b[32..] >= Fr::MODULUS.to_bytes_be()[..] {return None }
     let x = Fq::from_be_bytes_mod_order(&b[..32]);
     let a = Affine::get_point_from_x_unchecked(x, false)?;
     let p: Projective = a.into(); 
@@ -59,6 +63,8 @@ pub fn normalize_parity(d: Fr) -> (Fr, Projective) {
 }
 
 pub fn verify(p: &PublicKey, m: &[u8], sig: &Signature) -> bool {
+    // reject point at infinity (additive identity)
+    if p.is_zero() || sig.r.is_zero() { return false; }
     let g = Projective::generator();
     let e = challenge(&sig.r, p, m);
     let p = if even_y(p) { *p } else { -*p };
@@ -108,6 +114,27 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_identity_key_and_nonce() {
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let kp = KeyPair::generate(&mut rng);
+        let m = b"message";
+        let sig = sign(&kp.private, m, &mut rng);
+        assert!(!verify(&Projective::zero(), m, &sig));
+        let bad = Signature { r: Projective::zero(), s: sig.s };
+        assert!(!verify(&kp.public, m, &bad));
+    }
+  
+    #[test]
+    fn sig_from_bytes_rejects_s_at_group_order() {
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let kp = KeyPair::generate(&mut rng);
+        let sig = sign(&kp.private, b"m", &mut rng);
+        let mut bytes = to_bytes(&sig);
+        bytes[32..].copy_from_slice(&Fr::MODULUS.to_bytes_be());
+        assert!(sig_from_bytes(&bytes).is_none());
+    }
+
+    #[test]
     fn rejects_wrong_message() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let kp = KeyPair::generate(&mut rng);
@@ -150,7 +177,8 @@ mod tests {
         let e1 = challenge(&sig1.r, &kp.public, m1);
         let e2 = challenge(&sig2.r, &kp.public, m2);
         let x = (sig1.s - sig2.s) / (e1 - e2);
-        assert_eq!(x, kp.private)
+        assert_eq!(x, normalize_parity(kp.private).0);
+
     }
 
     #[test]

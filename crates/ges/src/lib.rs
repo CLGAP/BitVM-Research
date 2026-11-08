@@ -10,7 +10,7 @@ pub struct PublicKey { pub pairs: Vec<Pair<Hash>> }
 pub struct Signature { pub secrets: Vec<Secret> }
 
 pub fn keygen(e: &EncodingInfo) -> PublicKey {
-     PublicKey { pairs: e.input_pairs.iter().map( |pair| Pair { zero: Sha256::digest(pair.zero).into(), one: Sha256::digest(pair.one).into() }).collect() }
+    PublicKey { pairs: e.input_pairs.iter().map( |pair| Pair { zero: Sha256::digest(pair.zero).into(), one: Sha256::digest(pair.one).into() }).collect() }
 }
 
 pub fn sign(e: &EncodingInfo, x: &[bool]) -> Signature {
@@ -19,8 +19,8 @@ pub fn sign(e: &EncodingInfo, x: &[bool]) -> Signature {
     Signature { secrets: e.input_pairs.iter().zip(x).map(|(pair, &bit)| if bit { pair.one } else { pair.zero }).collect() }
 }
 
-pub fn vrfy(pk: &PublicKey, sig: &Signature) -> bool {
-    assert_eq!(pk.pairs.len(), sig.secrets.len());
+pub fn verify(pk: &PublicKey, sig: &Signature) -> bool {
+     if pk.pairs.len() != sig.secrets.len() { return false; }
     pk.pairs.iter().zip(&sig.secrets)
         .all(|(pairs, sig)| { 
             let h = <Hash>::from(Sha256::digest(sig));
@@ -49,7 +49,7 @@ mod tests {
         let pk = keygen(&e);
         let x = [true, false];
         let sig = sign(&e, &x);
-        assert!(vrfy(&pk, &sig));
+        assert!(verify(&pk, &sig));
 
     }
 
@@ -76,7 +76,7 @@ mod tests {
         let x = [true, false];
         let sig = sign(&e, &x);
         let l_x = extract(&pk, &sig);
-        let l_y = garble_yao::ev(&circuit, &gc, &l_x);
+        let l_y = garble_yao::ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
         let y = garble_yao::de(&d, &l_y);
         assert_eq!(Some(circuit.evaluate(&x)), y);
     }

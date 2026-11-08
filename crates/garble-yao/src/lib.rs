@@ -1,6 +1,6 @@
 use circuit::{Circuit, Gate};
 use rand::{Rng, seq::SliceRandom};
-use sha2::{Digest, Sha384};
+use sha2::{Digest, Sha256, Sha384};
 
 // Label: 32 bytes (k = 256; rejection-sampled below the secp256k1 group order,
 // so every label is its own scalar and the label-to-scalar map of the adaptor
@@ -8,6 +8,7 @@ use sha2::{Digest, Sha384};
 // Ciphertext row = label || 0^16 = 48 bytes. SHA-384 outputs exactly 48 bytes, so its whole
 // output is the keystream (k + t = 256 + 128); no bytes discarded.
 pub type Label = [u8; 32];
+pub type Hash = [u8; 32]; // will deviate from Label later
 pub type Ciphertext = [u8; 48];
 
 // secp256k1 group order n, stored least-significant byte first (labels are read
@@ -17,24 +18,37 @@ pub type Ciphertext = [u8; 48];
 // (slightly below 2^256; n has no compact power form -- that belongs to the
 // base-field prime p = 2^256 - 2^32 - 977)
 // Source: SEC 2 v2.0, §2.4.1, https://www.secg.org/sec2-v2.pdf (also BIP340).
+// To be deleted together with `below_order` and `sample_label` once the per-wire
+// adaptor bridge (ges-via-adaptor/src/lib.rs), only user, is removed.
+
 pub const N_LE: [u8; 32] = [
     0x41, 0x41, 0x36, 0xD0, 0x8C, 0x5E, 0xD2, 0xBF,
     0x3B, 0xA0, 0x48, 0xAF, 0xE6, 0xDC, 0xAE, 0xBA,
     0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 ];
+
 #[derive(Clone)]
-pub struct LabelPair {
-    pub zero: Label, // L^0
-    pub one: Label, // L^1
+pub struct Pair<T> {
+    pub zero: T, // L^0
+    pub one: T, // L^1
 }
 
+impl<T: Copy> Pair<T> {
+    pub fn select(&self, bit: bool) -> T {
+        if bit { self.one } else { self.zero }
+    }
+}
+
+// used in `bitcoin-tx`
+pub type LabelPair = Pair<Label>;
+
 pub struct EncodingInfo {
-    pub input_pairs: Vec<LabelPair>,
+    pub input_pairs: Vec<Pair<Label>>,
 }
 
 pub struct DecodingInfo {
-    pub output_maps: Vec<LabelPair>,
+    pub output_maps: Vec<Pair<Hash>>,
 }
 
 pub struct GarbledGate {
@@ -56,21 +70,27 @@ pub fn gb<R: Rng>(circuit: &Circuit, rng: &mut R) -> (GarbledCircuit, EncodingIn
     let input_pairs: Vec<LabelPair> = circuit.input_wires.iter().map(|&w| wire_pairs[w].clone()).collect();
     let e = EncodingInfo { input_pairs };
 
-    let output_maps: Vec<LabelPair> = circuit.output_wires.iter().map(|&w| wire_pairs[w].clone()).collect();
+    let output_maps: Vec<Pair<Hash>> = circuit.output_wires.iter().map(|&w| 
+        Pair { 
+            zero: out_hash(&wire_pairs[w].zero),
+            one: out_hash(&wire_pairs[w].one) 
+        }).collect();
+
     let d = DecodingInfo { output_maps };
 
     let mut garbled_circuit: Vec<GarbledGate> = Vec::with_capacity(circuit.gates.len());
     for (gate_idx, gate) in circuit.gates.iter().enumerate() {
-        let nu = (i32::try_from(gate_idx).unwrap()).to_le_bytes(); //nonce
+        let nu = (u64::try_from(gate_idx).unwrap()).to_le_bytes(); //nonce
         let mut ciphertext: Vec<Ciphertext> = Vec::new();
 
         match gate {
-            Gate::And { a, b, out } => {
+            Gate::And { a, b, out } | Gate::Xor { a, b, out } => {
                 for i in [false, true] {
                     for j in [false, true] {
-                        let k_1 = if i { wire_pairs[*a].one } else { wire_pairs[*a].zero };
-                        let k_2 = if j { wire_pairs[*b].one } else { wire_pairs[*b].zero };
-                        let m_label = if i && j { wire_pairs[*out].one } else { wire_pairs[*out].zero }; 
+                        let k_1 = wire_pairs[*a].select(i);
+                        let k_2 = wire_pairs[*b].select(j);
+                        let out_bit = match gate { Gate::And { .. } => i && j, _ => i ^ j };
+                        let m_label = wire_pairs[*out].select(out_bit); 
 
                         let hash: [u8; 48] = Sha384::new().chain_update(k_1).chain_update(k_2).chain_update(nu).finalize().into();
                         let mut plaintext = [0u8;48];
@@ -81,26 +101,10 @@ pub fn gb<R: Rng>(circuit: &Circuit, rng: &mut R) -> (GarbledCircuit, EncodingIn
                     }
                 }
             }
-            Gate::Xor { a, b, out } => {
-                for i in [false, true] {
-                    for j in [false, true] {
-                        let k_1 = if i { wire_pairs[*a].one } else { wire_pairs[*a].zero };
-                        let k_2 = if j { wire_pairs[*b].one } else { wire_pairs[*b].zero };
-                        let m_label = if i ^ j { wire_pairs[*out].one } else { wire_pairs[*out].zero };
-
-                        let hash: [u8; 48]= Sha384::new().chain_update(k_1).chain_update(k_2).chain_update(nu).finalize().into();
-                        let mut plaintext= [0u8; 48];
-                        plaintext[..32].copy_from_slice(&m_label);
-                        let mut row = [0u8; 48];
-                        for k in 0..48 { row[k]= hash[k] ^ plaintext[k] };
-                        ciphertext.push(row);
-                    }
-                }
-            }
             Gate::Not { input, output } => {
                 for i in [false, true] {
-                    let k_1 = if i { wire_pairs[*input].one } else { wire_pairs[*input].zero };
-                    let m_label = if i { wire_pairs[*output].zero } else { wire_pairs[*output].one };
+                    let k_1 =   wire_pairs[*input].select(i);
+                    let m_label = wire_pairs[*output].select(!i);
 
                     let hash: [u8; 48] = Sha384::new().chain_update(k_1).chain_update(nu).finalize().into();
                     let mut plaintext = [0u8; 48];
@@ -136,10 +140,10 @@ fn below_order(l: &Label) -> bool {
 }
 
 pub fn en(e: &EncodingInfo, x: &[bool]) -> Vec<Label> {
-    e.input_pairs.iter().zip(x).map(|(pair, &bit)| if bit { pair.one } else { pair.zero }).collect()
+    e.input_pairs.iter().zip(x).map(|(pair, &bit)| pair.select(bit)).collect()
 }                                            
 
-pub fn ev(circuit: &Circuit, gc: &GarbledCircuit, l_x: &[Label]) -> Vec<Label> {
+pub fn ev(circuit: &Circuit, gc: &GarbledCircuit, l_x: &[Label]) -> Option<Vec<Label>> {
     assert_eq!(circuit.gates.len(), gc.gates.len(), "Garbled circuit and original circuit must have same number of gates");
     assert_eq!(circuit.input_wires.len(), l_x.len(), "There must be an encoded wire for every input wire");
     let mut buf: Vec<Option<Label>> = vec![None; circuit.num_wires];
@@ -149,47 +153,52 @@ pub fn ev(circuit: &Circuit, gc: &GarbledCircuit, l_x: &[Label]) -> Vec<Label> {
     }
 
     for (gate_idx, gate) in circuit.gates.iter().enumerate() {
-        let nu = (i32::try_from(gate_idx).unwrap()).to_le_bytes();
+        let nu = (u64::try_from(gate_idx).unwrap()).to_le_bytes();
         let garbled = &gc.gates[gate_idx];
 
         match gate {
             Gate::And { a, b, out} | Gate::Xor { a, b, out } => {
-                let k_1 = buf[*a].expect("wire not set");
-                let k_2 = buf[*b].expect("wire not set");
+                let k_1 = buf[*a]?;
+                let k_2 = buf[*b]?;
                 let hash: [u8; 48] = Sha384::new().chain_update(k_1).chain_update(k_2).chain_update( nu).finalize().into();
                 let label = trial_decrypt(&garbled.ciphertexts, &hash);
-                buf[*out] = Some(label)
+                buf[*out] = label
             }
             Gate::Not { input, output} => {
                 let k = buf[*input].expect("wire not set");
                 let hash: [u8; 48] = Sha384::new().chain_update(k).chain_update(nu).finalize().into();
                 let label = trial_decrypt(&garbled.ciphertexts, &hash);
-                buf[*output] = Some(label);
+                buf[*output] = label;
             }
         }
     }
-    circuit.output_wires.iter().map(|&w| buf[w].expect("output wire not set")).collect()
+    circuit.output_wires.iter().map(|&w| buf[w]).collect()
 }
 
-fn trial_decrypt(ciphertexts: &[Ciphertext], hash: &[u8;48]) -> Label {
+fn trial_decrypt(ciphertexts: &[Ciphertext], hash: &[u8;48]) -> Option<Label> {
     for c in ciphertexts {
         let mut pt = [0u8; 48];
         for k in 0..48 { pt[k] = hash[k] ^ c[k]; }  // (B Xor A) Xor A = B
         if pt[32..] == [0u8; 16] {
             let mut label = [0u8; 32];
             label.copy_from_slice(&pt[..32]);
-            return label;
+            return Some(label);
         }
     }
-    panic!("No valid decryption, authentication issue/bug");
+    None
 }
 
 pub fn de(d: &DecodingInfo, l_y: &[Label]) -> Option<Vec<bool>> {
     d.output_maps.iter().zip(l_y).map(|(pair, label)| {
-        if pair.zero == *label { Some(false) }
-        else if pair.one == *label { Some(true) }
+        let h = out_hash(label);
+        if pair.zero == h { Some(false) }
+        else if pair.one == h { Some(true) }
         else { None }
     }).collect()
+}
+
+fn out_hash(label: &Label) -> Hash {
+    Sha256::new().chain_update(label).chain_update(b"out").finalize().into()
 }
 
 #[cfg(test)]
@@ -207,7 +216,7 @@ mod tests {
 
         for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
             let l_x = en(&e, &[a, b]);
-            let l_y = ev(&circuit, &gc, &l_x);
+            let l_y = ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
             let y = de(&d, &l_y).expect("Correct decoding never returns None");
             assert_eq!(y, vec![a && b], "for inputs ({}, {})", a, b);
         }
@@ -221,7 +230,7 @@ mod tests {
         
         for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
             let l_x = en(&e, &[a, b]);
-            let l_y = ev(&circuit, &gc, &l_x);
+            let l_y = ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
             let y = de(&d, &l_y).expect("Correct decoding never returns None");
             assert_eq!(y, vec![a ^ b, a && b], "for inputs ({}, {})", a, b);
         }
@@ -240,7 +249,7 @@ mod tests {
             [true, true, false],   [true, true, true],
             ] {
             let l_x = en(&e, &[a, b, c]);
-            let l_y = ev(&circuit, &gc, &l_x);
+            let l_y = ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
             let y = de(&d, &l_y).expect("Correct decoding never returns None");
             assert_eq!(y, vec![(a ^ b) && !c], "for inputs ({}, {}, {})", a, b, c);
         }                
@@ -259,7 +268,7 @@ mod tests {
             [true, true, false],   [true, true, true],
             ] {
             let l_x = en(&e, &x);
-            let mut l_y = ev(&circuit, &gc, &l_x);
+            let mut l_y = ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
             l_y[0] = [0; 32];
             assert_eq!(de(&d, &l_y), None);
         }
@@ -267,16 +276,32 @@ mod tests {
     }
 
     #[test]
-    fn de_returns_none_on_partial_invalid_label() {
+    fn de_returns_none_if_any_output_label_corrupt() {
         let circuit = half_adder();
         let mut rng = ChaCha20Rng::seed_from_u64(42);
         let (gc, e, d) = gb(&circuit, &mut rng);
         
         for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
             let l_x = en(&e, &[a, b]);
-            let mut l_y = ev(&circuit, &gc, &l_x);
-            l_y[0] = [0; 32];
+            let mut l_y = ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
+            l_y[0][0] ^= 1;
             assert!(de(&d, &l_y).is_none(), "for inputs ({}, {})", a, b);
+        }
+    }
+
+    #[test]
+    fn ev_returns_none_on_corrupt_gc() {
+        let circuit = and_gate();
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let (mut gc, e, _d) = gb(&circuit, &mut rng);
+        let last = gc.gates[0].ciphertexts[0].len() - 1;
+        for row in &mut gc.gates[0].ciphertexts {
+            row[last] ^= 1;
+        }
+
+        for [a, b] in [[false, false], [false, true], [true, false], [true, true]] {
+            let l_x = en(&e, &[a, b]);
+            assert!(ev(&circuit, &gc, &l_x).is_none());
         }
     }
 

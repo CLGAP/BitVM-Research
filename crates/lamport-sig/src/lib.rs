@@ -34,9 +34,8 @@ pub fn sign(sk: SecretKey, m: &[bool]) -> Signature {
 }
 
 pub fn vrfy(pk: &PublicKey, m: &[bool], sig: &Signature) -> bool {
-    // see line 30, and note == transitive
-    assert!(pk.pairs.len() == m.len() && m.len() == sig.secrets.len() );
-
+    // see `sign`, and note == transitive
+    if !(pk.pairs.len() == m.len() && m.len() == sig.secrets.len()) { return false; }
     pk.pairs.iter().zip(m).zip(&sig.secrets).all(|((pairs, &bit), sig)| {
         <Hash>::from(Sha256::digest(sig)) ==  if bit {pairs.one} else { pairs.zero}
     })
