@@ -36,7 +36,7 @@ fn round_trip(w: usize) {
     let sigs = wide_post(&wide_secrets, &x, &wide_setup);
     let labels = wide_extract(&wide_setup, &sigs); 
     assert_eq!(labels, garble_yao::en(&e, &x));
-    let ev_labels = garble_yao::ev(&circuit, &gc, &labels);
+    let ev_labels = garble_yao::ev(&circuit, &gc, &labels).expect("honest garbling always evaluates");
     assert_eq!(garble_yao::de(&d, &ev_labels), Some(circuit.evaluate(&x)));
 }
 

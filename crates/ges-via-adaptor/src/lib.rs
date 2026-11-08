@@ -80,26 +80,16 @@ pub fn post(e: &EncodingInfo, pre: &PreSigs, x: &[bool]) -> Claim {
 }
 
 pub fn extract_all(pk: &PublicKey, pre: &PreSigs, claim: &Claim) -> Vec<Label> {
-    let g = Projective::generator();
     pre.pairs
         .iter()
         .zip(claim.sigs.iter())
         .zip(pk.pairs.iter())
         .map(|((ps_pair, sig), pk_pair)| {
-            let t0 = adaptor_sig::extract(&ps_pair.zero, sig);
-            if g * t0 == pk_pair.zero {
-                scalar_to_label(&t0)
-            } else {
-                let t1 = adaptor_sig::extract(&ps_pair.one, sig);
-                assert_eq!(
-                    g * t1,
-                    pk_pair.one,
-                    "extracted label matches neither statement"
-                );
-                scalar_to_label(&t1)
-            }
-        })
-        .collect()
+            let t = adaptor_sig::extract(&ps_pair.zero, sig, &pk_pair.zero).or_else(
+                || adaptor_sig::extract(&ps_pair.one, sig, &pk_pair.one)
+            ).expect("extracted label matches neither of the statements");
+            scalar_to_label(&t)
+        }).collect()
 }
 
 pub fn pre_verify_all(p: &Projective, ms: &[[u8; 32]], pk: &PublicKey, pre: &PreSigs) -> bool {

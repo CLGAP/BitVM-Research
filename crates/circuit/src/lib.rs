@@ -26,23 +26,24 @@ impl Circuit {
         Self { num_wires, input_wires, output_wires, gates }
     }
 
-    pub fn evaluate(&self, input: &[bool]) -> Vec<bool> { //compare input with ciphertexts of src/garble-yao/src/lib.rs which has no booleans.
+    pub fn evaluate(&self, input: &[bool]) -> Vec<bool> { 
+        //compare input with ciphertexts of src/garble-yao/src/lib.rs which has no booleans.
         assert_eq!(input.len(), self.input_wires.len(), "input length mismatch");
         
-        let mut buf = vec![false; self.num_wires];
+        let mut buf = vec![None; self.num_wires];
 
         for (i, &wire_id) in self.input_wires.iter().enumerate() {
-            buf[wire_id] = input[i];
+            buf[wire_id] = Some(input[i]);
         }
 
         for gate in &self.gates {
             match gate {
-                Gate::And { a, b, out } => buf[*out] = buf[*a] && buf[*b],
-                Gate::Xor { a, b, out } => buf[*out] = buf[*a] ^ buf[*b],
-                Gate::Not { input, output } => buf[*output] = !buf[*input],
+                Gate::And { a, b, out } => buf[*out] = Some(buf[*a].expect("wire read before write") && buf[*b].expect("wire read before write")),
+                Gate::Xor { a, b, out } => buf[*out] = Some(buf[*a].expect("wire read before write") ^ buf[*b].expect("wire read before write")),
+                Gate::Not { input, output } => buf[*output] = Some(!buf[*input].expect("wire read before write")),
             }
         }
-        self.output_wires.iter().map(|&w| buf[w]).collect()
+        self.output_wires.iter().map(|&w| buf[w].expect("output wire never written")).collect()
     }
 }
 

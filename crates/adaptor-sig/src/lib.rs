@@ -1,6 +1,6 @@
 use ark_secp256k1::{Fr, Projective};
 use ark_ec::{Group};
-use ark_std::{rand::Rng, UniformRand};
+use ark_std::{rand::Rng, UniformRand, Zero};
 use schnorr::Signature;
 // statement/witness pair fo relation: T = [t]G
 pub type Statement = Projective; // T
@@ -20,9 +20,11 @@ pub enum PreSignError {
     /// signature would therefore be checked against the mirror point 
     /// (x, p - y) and be rejected by Bitcoin consensus check.  
     OddParity,
+    IdentityStatement
 }
 
 pub fn pre_sign_with_nonce(x: &Fr, m: &[u8], t: &Statement, k: &Fr) -> Result<PreSignature, PreSignError> {
+    if t.is_zero() { return Err(PreSignError::IdentityStatement); }
     let g = Projective::generator();
     let r = g * k;
     if !schnorr::even_y(&(r + t)) { return Err(PreSignError::OddParity); }
@@ -39,18 +41,21 @@ pub fn pre_sign<R: Rng>(x: &Fr, m: &[u8], t: &Statement, rng: &mut R) -> PreSign
 }
 
 pub fn pre_verify(p: &Projective, m: &[u8], t: &Statement, ps: &PreSignature) -> bool {
+    if t.is_zero() { return false; }
     let g = Projective::generator();
     let p = if schnorr::even_y(p) {*p} else {-*p};
     let e = schnorr::challenge(&(ps.r + t), &p, m);
     g * ps.s_t == ps.r + p * e && schnorr::even_y(&(ps.r + t))
 }
 
+/// Does not check witness*G is statement T committed into challenge e in ps.s
 pub fn adapt(ps: &PreSignature, witness: &Fr) -> Signature {
     Signature { r: ps.r + Projective::generator() * witness, s: ps.s_t + witness }
 }
 
-pub fn extract(ps: &PreSignature, sig: &Signature) -> Witness {
-    sig.s - ps.s_t
+pub fn extract(ps: &PreSignature, sig: &Signature, t: &Statement) -> Option<Witness> {
+    let w = sig.s - ps.s_t;
+    (Projective::generator() * w == *t).then_some(w)
 }
 
 #[cfg(test)]
@@ -142,7 +147,21 @@ mod tests {
         let ps = pre_sign(&kp.private, m, &t, &mut rng);
         let sig = adapt(&ps, &witness);
         assert_eq!(sig.r - ps.r, t);
-        assert_eq!(extract(&ps, &sig), witness);
+        assert_eq!(extract(&ps, &sig, &t), Some(witness));
+    }
+
+    #[test]
+    fn extract_rejects_wrong_statement() {
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let kp = schnorr::KeyPair::generate(&mut rng);
+        let witness = Fr::rand(&mut rng);
+        let t = Projective::generator() * witness;
+        let ps = pre_sign(&kp.private, b"something", &t, &mut rng);
+        let sig = adapt(&ps, &witness);
+        let wrong_t = t + Projective::generator();
+        assert_eq!(extract(&ps, &sig, &t), Some(witness));
+        assert!(extract(&ps, &sig, &wrong_t).is_none());
+
     }
 
     #[test]
@@ -159,7 +178,7 @@ mod tests {
         let ps_a = pre_sign(&kp_alice.private, m_a, &t, &mut rng);
         assert!(pre_verify(&kp_alice.public, m_a, &t, &ps_a)); // done by Bob
         let sig_a = adapt(&ps_a, &witness_b); // done by Bob
-        let witness_a = extract(&ps_a, &sig_a);
+        let witness_a = extract(&ps_a, &sig_a, &t).expect("sig_a does not complete ps_a");
         assert_eq!(witness_a, witness_b);
         let sig_b = adapt(&ps_b, &witness_a); // done by Alice
         // assert below proves atomocity of leak of witness

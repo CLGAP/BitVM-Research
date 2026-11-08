@@ -53,7 +53,7 @@ fn end_to_end_eval_and_decode() {
     let x = [true, false];
     let claim = post(&e, &pre, &x);
     let l_x = extract_all(&pk, &pre, &claim);
-    let l_y = garble_yao::ev(&circuit, &gc, &l_x);
+    let l_y = garble_yao::ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
     assert_eq!(garble_yao::de(&d, &l_y), Some(circuit.evaluate(&x)));
 }
 
@@ -85,7 +85,7 @@ fn generalises_end_to_end_eval_and_decode_to_three_gate() {
     let x = [true, false, true];
     let claim = post(&e, &pre, &x);
     let l_x = extract_all(&pk, &pre, &claim);
-    let l_y = garble_yao::ev(&circuit, &gc, &l_x);
+    let l_y = garble_yao::ev(&circuit, &gc, &l_x).expect("honest garbling always evaluates");
     assert_eq!(garble_yao::de(&d, &l_y), Some(circuit.evaluate(&x)));
 }
 
